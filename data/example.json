@@ -1,0 +1,17 @@
+[
+    {
+        "questions": ["How to reset password?", "Forgot password"],
+        "answers": [
+            "Go to Settings → 'Recover access'", 
+            "You can reset your password here: [link]"
+        ]
+    },
+    {
+        "questions": ["How to change username?", "Update account name", "Modify my username"],
+        "answers": [
+            "Username changes are available in Profile → 'Edit Account Details'",
+            "To update your username: 1) Go to Profile 2) Click 'Edit' 3) Enter new username",
+            "Note: You can only change your username once every 30 days"
+        ]
+    }
+]

@@ -172,3 +172,15 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# models
+hub/*
+!hub/.gitkeep
+
+# pipelines
+build/*
+!build/.gitkeep
+
+# data
+data/*
+!data/example.json
