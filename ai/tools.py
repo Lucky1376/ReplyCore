@@ -1,11 +1,48 @@
-import os
+import os, json
 import shutil
 from pathlib import Path
+
+def get_built_pipelines(target_dir: str = "build"):
+    """
+    Returns a list of built pipelines.
+
+    :param target_dir: Directory with built pipelines.
+    :return: List of dictionaries with pipeline information.
+    """
+    pipelines = []
+    path = Path(target_dir)
+
+    for item in path.iterdir():
+        if item.is_dir():
+            with open(item / "meta.json", "r", encoding="utf-8") as f:
+                meta = json.load(f)
+                data = {
+                    "name": item.name,
+                    "questions": meta["questions_count"],
+                    "created_at": meta["training_params"]["created_at"]
+                }
+                pipelines.append(data)
+    
+    return pipelines
+
+def delete_built_pipeline(pipeline_name: str, target_dir: str = "build"):
+    """
+    Deletes a built pipeline.
+
+    :param pipeline_name: Name of the pipeline.
+    :param target_dir: Directory with built pipelines.
+    """
+    pipeline_dir = Path(target_dir) / pipeline_name
+    if pipeline_dir.exists():
+        shutil.rmtree(pipeline_dir)
+    else:
+        raise FileNotFoundError(f"Pipeline {pipeline_name} not found")
 
 def get_download_models(target_dir: str = "hub"):
     """
     Returns a list of downloaded models.
     
+    :param target_dir: Directory with downloaded models.
     :return: List of dictionaries with model information.
     """
     models = []

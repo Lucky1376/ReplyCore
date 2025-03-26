@@ -4,7 +4,9 @@ from utils.const import models
 def Download():
     print("\n[0] - Exit\n")
     for i, model in models.items():
-        print(f"[{i}] {model['name']} ({model['desc']})")
+        name = model["name"].split("/")[-1]
+        desc = model["desc"]
+        print(f"[{i}] {name} ({desc})")
 
     choice = int(input("\nSelect a model: "))
 

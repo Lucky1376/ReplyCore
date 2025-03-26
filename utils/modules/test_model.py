@@ -1,15 +1,27 @@
 from ai.pipeline_tester import PipelineTester
+from ai.tools import get_built_pipelines
 import json
 
 def Test():
     print("\n\n[0] - Exit\n")
-    # print("Доступные модели:\n")
+    print("Available pipelines:\n")
+    pipelines = get_built_pipelines()
+    for i, pipeline in enumerate(pipelines):
+        # print(pipeline)
+        print(f"[{i + 1}] {pipeline['name']} ({pipeline['questions']} questions, created on {pipeline['created_at']})")
+    if not pipelines:
+        print("None")
     # for model in edu.get_trained_models():
     #     print(f" - {model['name']} ({model['questions']} вопросов, создана {model['created_at']})")
     model_name = input("\nEnter the pipeline name: ")
 
     if model_name in ["0", ""]:
         return
+
+    try:
+        model_name = pipelines[int(model_name) - 1]["name"]
+    except:
+        pass
 
     tester = PipelineTester(model_name)
 

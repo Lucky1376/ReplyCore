@@ -9,6 +9,7 @@ def Build(get_downloaded_models):
     print("[1] - Cyclic strategy")
     print("[2] - Random strategy")
     print("[3] - Last strategy")
+    print("[4] - Most similar strategy")
     print()
     answer_strategy = input("Select a strategy: ")
 
@@ -20,14 +21,18 @@ def Build(get_downloaded_models):
     i = 0
     print("Models from sentence-transformers:")
     for i, model in models.items():
-        print(f"[{i}] {model['name']} ({model['desc']})")
+        name = model["name"].split("/")[-1]
+        desc = model["desc"]
+        print(f"[{i}] {name} ({desc})")
         i += 1
     print()
     print("Models from hub:")
-    hub_models = get_downloaded_models()
+    hub_models: list = get_downloaded_models()
     for model in hub_models:
         print(f'[{i}] {model["name"]}')
         i += 1
+    if len(hub_models) == 0:
+        print("None")
     print()
     model_name = int(input("Select a model: "))
     

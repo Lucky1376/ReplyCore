@@ -34,7 +34,7 @@ class PipelineTester:
         model_files_path = self.model_path / 'model_files'
         if not model_files_path.exists():
             raise FileNotFoundError(f"Model files not found in {model_files_path}")
-            
+        
         self.model = SentenceTransformer(str(model_files_path))
         
         # Load the other components

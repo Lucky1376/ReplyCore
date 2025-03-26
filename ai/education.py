@@ -1,13 +1,15 @@
 import json
 import random
 import shutil
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from pathlib import Path
 import os
-
-hub_dir = 'hub'
-pipeline_dir = 'build'
+from datetime import datetime
+import time
+import numpy as np
+import torch
+from sentence_transformers import SentenceTransformer, util
+from typing import Literal, Optional, Dict, List
+from pathlib import Path
+from tqdm import tqdm
 
 class Education:
     def __init__(self, model_name='paraphrase-multilingual-MiniLM-L12-v2'):
@@ -17,9 +19,11 @@ class Education:
         :param hub_dir: folder with saved models (optional)
         """
         self.model_name = model_name
-        self.hub_dir = hub_dir
+        self.hub_dir = 'hub'
         self.data_dir = 'data'
-        self.pipeline_dir = pipeline_dir
+        self.pipeline_dir = 'build'
+        self._answer_embeddings_cache = {}
+        self._current_answers_hash = None
         self._ensure_dirs_exist()
         self.model = self._init_model()
     
@@ -37,7 +41,7 @@ class Education:
                     print(f"Failed to load the model from hub: {str(e)}")
         
         # If not found in the hub, load directly
-        full_model_name = f'sentence-transformers/{self.model_name}' if not self.model_name.startswith('sentence-transformers/') else self.model_name
+        full_model_name = self.model_name
         _a = SentenceTransformer(full_model_name)
         print("Model loaded directly")
         return _a
@@ -61,17 +65,6 @@ class Education:
         if self.hub_dir:
             Path(self.hub_dir).mkdir(parents=True, exist_ok=True)
 
-    def get_available_datasets(self):
-        """Returns a list of available JSON files for training"""
-        datasets = []
-        for file in Path(self.data_dir).glob('*.json'):
-            datasets.append({
-                'name': file.name,
-                'path': str(file),
-                'size': file.stat().st_size
-            })
-        return datasets
-
     def _copy_pipeline_files(self, model_dir: str):
         """Copies the necessary files for the pipeline to work"""
         dest_path = Path(model_dir)
@@ -94,14 +87,55 @@ class Education:
             if req_path.exists():
                 shutil.copy(req_path, dest_path)
                 break
+    
+    def _get_embeddings(self, answers: List[str], force_update: bool = False) -> torch.Tensor:
+        """Smart caching of answer embeddings"""
+        answers_tuple = tuple(answers)
+        current_hash = hash(answers_tuple)
+        
+        if force_update or current_hash != self._current_answers_hash:
+            self._clear_embeddings_cache()
+            self._current_answers_hash = current_hash
+            
+        if current_hash not in self._answer_embeddings_cache:
+            with torch.no_grad():
+                self._answer_embeddings_cache[current_hash] = {
+                    'embeddings': self.model.encode(answers, convert_to_tensor=True),
+                    'timestamp': time.time()
+                }
+        
+        return self._answer_embeddings_cache[current_hash]['embeddings']
 
-    def train_on_file(self, data_file, model_name, answer_strategy='last'):
+    def _clear_embeddings_cache(self, max_items: int = 3, max_age_hours: int = 24):
+        """Clearing old caches"""
+        now = time.time()
+        to_delete = []
+        
+        if len(self._answer_embeddings_cache) > max_items:
+            oldest = sorted(self._answer_embeddings_cache.items(), 
+                          key=lambda x: x[1]['timestamp'])[0][0]
+            to_delete.append(oldest)
+        
+        for h, data in self._answer_embeddings_cache.items():
+            if (now - data['timestamp']) > max_age_hours * 3600:
+                to_delete.append(h)
+        
+        for h in set(to_delete):
+            del self._answer_embeddings_cache[h]
+            if h == self._current_answers_hash:
+                self._current_answers_hash = None
+
+    def train_on_file(self, data_file: str, model_name: str, 
+                 answer_strategy: Literal['last', 'cycle', 'random', 'most_similar'] = 'last',
+                 show_progress: bool = True, chunk_size: int = 100):
         """
         Train the model on the specified data file
         :param data_file: name of the data file (e.g. 'faq.json')
         :param model_name: name for saving the model
         :param answer_strategy: answer selection strategy 
-            ('last' - last, 'cycle' - cyclic, 'random' - random)
+            ('last' - last, 'cycle' - cyclic, 'random' - random, 'most_similar' - most similar)
+        :param show_progress: whether to show progress bars
+        :param chunk_size: batch size for question encoding
         :return: dictionary with training results
         """
         # Data validation
@@ -123,11 +157,13 @@ class Education:
         if not isinstance(faq, list):
             raise ValueError("Data should be an array of objects")
 
-        # Prepare data
+        # Prepare data with progress bars
         all_questions = []
         all_answers = []
         
-        for item in faq:
+        # Main progress bar for FAQ items
+        faq_iter = tqdm(faq, desc="Processing FAQ items", disable=not show_progress)
+        for item in faq_iter:
             if not all(k in item for k in ['questions', 'answers']):
                 raise ValueError("Each item must contain 'questions' and 'answers'")
             
@@ -137,7 +173,10 @@ class Education:
             if not answers:
                 raise ValueError("Answer list cannot be empty")
             
-            for i, question in enumerate(questions):
+            # Nested progress bar for questions
+            questions_iter = tqdm(questions, desc="   Processing questions", 
+                                leave=False, disable=not show_progress)
+            for i, question in enumerate(questions_iter):
                 all_questions.append(question)
                 
                 # Select answer by strategy
@@ -147,6 +186,11 @@ class Education:
                     answer = answers[i % len(answers)]
                 elif answer_strategy == 'random':
                     answer = random.choice(answers)
+                elif answer_strategy == 'most_similar':
+                    answer_embeddings = self._get_embeddings(answers)
+                    question_embedding = self.model.encode(question, convert_to_tensor=True)
+                    similarities = util.cos_sim(question_embedding, answer_embeddings)[0]
+                    answer = answers[similarities.argmax().item()]
                 else:
                     raise ValueError(f"Invalid strategy: {answer_strategy}")
                 
@@ -155,19 +199,27 @@ class Education:
         if not all_questions:
             raise ValueError("No questions found for training")
 
-        # Encode questions
-        question_embeddings = self.model.encode(all_questions)
+        # Encode questions with chunked progress bar
+        question_embeddings = []
+        chunks = [all_questions[i:i + chunk_size] for i in range(0, len(all_questions), chunk_size)]
+        
+        encoding_iter = tqdm(chunks, desc="Encoding questions", disable=not show_progress)
+        for chunk in encoding_iter:
+            question_embeddings.extend(self.model.encode(chunk))
+        
+        question_embeddings = np.array(question_embeddings)
 
         # Create model folder
         model_dir = os.path.join(self.pipeline_dir, model_name)
         Path(model_dir).mkdir(parents=True, exist_ok=True)
         
         # Save results
+        print(f"Saving pipeline...")
         np.save(os.path.join(model_dir, 'question_embeddings.npy'), question_embeddings)
         with open(os.path.join(model_dir, 'answers.json'), 'w', encoding='utf-8') as f:
             json.dump(all_answers, f, ensure_ascii=False, indent=2)
         
-        # Save the model (added back)
+        # Save the model
         model_files_path = os.path.join(model_dir, 'model_files')
         self.model.save(model_files_path)
         
@@ -189,11 +241,12 @@ class Education:
                 'source': 'local_hub',
                 'embedding_dim': question_embeddings.shape[1],
                 'max_seq_length': self.model.max_seq_length,
-                'model_files_path': 'model_files'  # Relative path
+                'model_files_path': 'model_files'
             },
             'training_params': {
                 'answer_strategy': answer_strategy,
-                'created_at': str(np.datetime64('now'))
+                'created_at': datetime.now().isoformat(),
+                'chunk_size': chunk_size
             }
         }
         
@@ -211,6 +264,11 @@ class Education:
             'answers_processed': len(all_answers),
             'embedding_shape': question_embeddings.shape
         }
+
+    def update_answers(self, new_answers: List[str]):
+        """Принудительное обновление кэша эмбеддингов"""
+        self._clear_embeddings_cache(max_items=0)
+        self._get_embeddings(new_answers, force_update=True)
     
     def get_trained_models(self):
         """Returns a list of trained models"""
